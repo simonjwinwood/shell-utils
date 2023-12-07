@@ -1,0 +1,91 @@
+#!/bin/zsh
+
+function usage () {
+    echo "Usage: stamp [-m message] pfx command a1 a2 a3"
+}
+
+DATETAG=`date +%Y-%m-%d-%H:%M:%S`
+NLINKS=10
+
+PFX=$1
+shift
+
+OSFX=.out
+ESFX=.err
+MSFX=.meta
+
+function linkfile () {
+    echo ${PFX}$1$2
+}
+
+function linkfileold () {
+    linkfile "latest.$1" $2
+}    
+
+function updlink () {
+    if [ -L $1 ];
+    then
+	rm -f $2
+	mv $1 $2
+    fi
+}
+
+function shift_links () {
+    local sfx=$1
+    for i in $(seq $NLINKS 2);
+    do
+	prevold=$(linkfileold $(( $i - 1 )) $sfx )
+	thisold=$(linkfileold $i $sfx )
+	updlink $prevold $thisold
+    done
+    updlink $(linkfile "latest" $sfx ) $(linkfileold 1 $sfx )
+}
+
+suffixes=(${OSFX} ${ESFX} ${MSFX})
+
+args=()
+for i in "$@";
+do
+    if echo $i | grep '%%' > /dev/null;
+    then
+	sfx=$(echo $i | sed 's/.*%%\([^ ]*\).*/\1/')
+	suffixes+=( $sfx )
+	new=$(echo $i | sed "s!%%!${PFX}${DATETAG}!")
+	args+=( $new )
+    else
+	args+=( $i )
+    fi
+done
+
+OFILE=${PFX}${DATETAG}${OSFX}
+EFILE=${PFX}${DATETAG}${ESFX}
+MFILE=${PFX}${DATETAG}${MSFX}
+
+mkdir -p $(dirname ${OFILE})
+
+OLINKFILE=$( linkfile latest ${OSFX} )
+ELINKFILE=$( linkfile latest ${ESFX} )
+MLINKFILE=$( linkfile latest ${MSFX} )
+
+for sfx in ${suffixes[@]};
+do
+    f=$(realpath ${PFX}${DATETAG}${sfx} )
+    l=$(linkfile latest ${sfx} )
+    shift_links $sfx
+    touch $f
+    ln -s $f $l
+done
+
+echo ${(q-)args} > ${MFILE}
+
+git log --pretty=format:'%h %d' -n 1 2>/dev/null >> ${MFILE}
+
+# # exec 3> ${MFILE}
+# # { 2>&3 time $@ ; } 2> ${EFILE} 1> ${OFILE}
+# # exec 3>&-
+
+TIMEFMT=$'\nuser\t%*U\nsystem\t%*S\ntotal\t%*E\nmemory\t%M'
+
+{ time ${args} >${OFILE} 2>${EFILE} ; } 2>> ${MFILE}
+printf "exit code: %d\n" $?  >> ${MFILE}
+
